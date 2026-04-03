@@ -13,7 +13,43 @@ const limiter = rateLimit({
 });
 app.use('/api/', limiter);
 
-const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
+const MODELS = [
+  'gemini-2.0-flash',
+  'gemini-1.5-flash-8b',
+  'gemini-1.5-pro'
+];
+
+async function callGemini(key, parts, maxTokens = 900, temp = 0.3) {
+  for (const model of MODELS) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
+        const r = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contents: [{ parts }], generationConfig: { maxOutputTokens: maxTokens, temperature: temp } })
+        });
+        if (r.status === 429 || r.status === 503) {
+          // wait 2s then retry, or move to next model
+          if (attempt === 0) { await new Promise(r => setTimeout(r, 2000)); continue; }
+          else break; // try next model
+        }
+        if (!r.ok) {
+          const e = await r.json().catch(() => ({}));
+          throw new Error(e?.error?.message || `Error ${r.status}`);
+        }
+        const data = await r.json();
+        const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!text) throw new Error('Empty response');
+        return text;
+      } catch (err) {
+        if (attempt === 1 || !err.message.includes('429')) throw err;
+        await new Promise(r => setTimeout(r, 2000));
+      }
+    }
+  }
+  throw new Error('All AI models are currently busy. Please try again in 30 seconds.');
+}
 
 app.get('/', (req, res) => res.json({ status: 'ChartMind AI running ✓', version: '1.0.0' }));
 
@@ -52,21 +88,13 @@ One sentence: what price action would completely invalidate this analysis.
     if (imageBase64) parts.push({ inline_data: { mime_type: imageMimeType || 'image/png', data: imageBase64 } });
     parts.push({ text: prompt });
 
-    const r = await fetch(`${GEMINI_URL}?key=${key}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents: [{ parts }], generationConfig: { maxOutputTokens: 900, temperature: 0.3 } })
-    });
-
-    if (!r.ok) {
-      const e = await r.json().catch(() => ({}));
-      if (r.status === 429) return res.status(429).json({ error: 'AI service is busy. Please wait a moment and try again.' });
-      return res.status(502).json({ error: e?.error?.message || 'AI service error. Try again.' });
+    let analysis;
+    try {
+      analysis = await callGemini(key, parts, 900, 0.3);
+    } catch (err) {
+      return res.status(503).json({ error: err.message });
     }
 
-    const data = await r.json();
-    const analysis = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!analysis) return res.status(502).json({ error: 'Empty AI response. Please try again.' });
     res.json({ analysis });
 
   } catch (err) {
@@ -89,16 +117,12 @@ app.post('/api/journal-insights', async (req, res) => {
 
     const parts = [{ text: `You are a trading coach analysing a retail Indian trader's journal. Be direct and genuinely useful. Find patterns: best instruments, worst setups, time-of-day tendencies, emotional patterns in notes, position sizing habits. Give 4-5 specific, actionable insights. Under 300 words.\n\nTrades:\n${summary}` }];
 
-    const r = await fetch(`${GEMINI_URL}?key=${key}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents: [{ parts }], generationConfig: { maxOutputTokens: 800, temperature: 0.5 } })
-    });
-
-    if (!r.ok) return res.status(502).json({ error: 'AI service error. Try again.' });
-    const data = await r.json();
-    const insights = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!insights) return res.status(502).json({ error: 'Empty response. Try again.' });
+    let insights;
+    try {
+      insights = await callGemini(key, parts, 800, 0.5);
+    } catch (err) {
+      return res.status(503).json({ error: err.message });
+    }
     res.json({ insights });
 
   } catch (err) {
