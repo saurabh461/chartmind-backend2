@@ -3,18 +3,18 @@ const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 
 const app = express();
+app.set('trust proxy', 1);
 app.use(express.json({ limit: '10mb' }));
 app.use(cors({ origin: '*' }));
 
 const limiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 50,
-  message: { error: 'Rate limit reached. Free tier allows 50 analyses per hour. Please try again later.' }
+  message: { error: 'Rate limit reached. Please try again later.' }
 });
 app.use('/api/', limiter);
 
-const GEMINI_MODEL = 'gemini-2.0-flash-exp';
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
 
 async function callGemini(key, parts, maxTokens = 900, temp = 0.3) {
   const r = await fetch(`${GEMINI_URL}?key=${key}`, {
@@ -27,12 +27,9 @@ async function callGemini(key, parts, maxTokens = 900, temp = 0.3) {
   });
 
   const data = await r.json().catch(() => ({}));
-
-  // Log the real error so you can see it in Render logs
   if (!r.ok) {
     console.error('Gemini error:', r.status, JSON.stringify(data?.error || data));
-    const msg = data?.error?.message || `Gemini API error ${r.status}`;
-    throw new Error(msg);
+    throw new Error(data?.error?.message || `Gemini API error ${r.status}`);
   }
 
   const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
