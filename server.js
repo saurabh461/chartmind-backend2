@@ -16,25 +16,42 @@ app.use('/api/', limiter);
 
 const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
 
-async function callGemini(key, parts, maxTokens = 900, temp = 0.3) {
-  const r = await fetch(`${GEMINI_URL}?key=${key}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ parts }],
-      generationConfig: { maxOutputTokens: maxTokens, temperature: temp }
-    })
-  });
+// Multiple keys — rotates automatically when one hits quota
+const GEMINI_KEYS = [
+  process.env.GEMINI_API_KEY,
+  process.env.GEMINI_API_KEY_2,
+].filter(Boolean);
 
-  const data = await r.json().catch(() => ({}));
-  if (!r.ok) {
-    console.error('Gemini error:', r.status, JSON.stringify(data?.error || data));
-    throw new Error(data?.error?.message || `Gemini API error ${r.status}`);
+let currentKeyIndex = 0;
+
+async function callGemini(parts, maxTokens = 900, temp = 0.3) {
+  for (let keyAttempt = 0; keyAttempt < GEMINI_KEYS.length; keyAttempt++) {
+    const key = GEMINI_KEYS[(currentKeyIndex + keyAttempt) % GEMINI_KEYS.length];
+    for (let retry = 0; retry < 2; retry++) {
+      const r = await fetch(`${GEMINI_URL}?key=${key}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts }],
+          generationConfig: { maxOutputTokens: maxTokens, temperature: temp }
+        })
+      });
+      const data = await r.json().catch(() => ({}));
+      if (r.status === 429) {
+        // Quota exhausted on this key — try next key
+        currentKeyIndex = (currentKeyIndex + 1) % GEMINI_KEYS.length;
+        break;
+      }
+      if (!r.ok) {
+        console.error('Gemini error:', r.status, JSON.stringify(data?.error));
+        throw new Error(data?.error?.message || `Gemini API error ${r.status}`);
+      }
+      const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!text) throw new Error('Empty response from Gemini');
+      return text;
+    }
   }
-
-  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text) throw new Error('Empty response from Gemini');
-  return text;
+  throw new Error('All API keys are currently at quota. Please try again in a few minutes.');
 }
 
 app.get('/', (req, res) => res.json({ status: 'ChartMind AI running ✓', version: '1.0.0' }));
@@ -76,9 +93,9 @@ One sentence: what price action would completely invalidate this analysis.
 
     let analysis;
     try {
-      analysis = await callGemini(key, parts, 900, 0.3);
+      analysis = await callGemini(parts, 900, 0.3);
     } catch (err) {
-      return res.status(503).json({ error: `AI Error: ${err.message}` });
+      return res.status(503).json({ error: err.message });
     }
 
     res.json({ analysis });
@@ -105,7 +122,7 @@ app.post('/api/journal-insights', async (req, res) => {
 
     let insights;
     try {
-      insights = await callGemini(key, parts, 800, 0.5);
+      insights = await callGemini(parts, 800, 0.5);
     } catch (err) {
       return res.status(503).json({ error: err.message });
     }
