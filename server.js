@@ -15,11 +15,12 @@ app.use('/api/', limiter);
 
 const MODELS = [
   'gemini-2.0-flash',
-  'gemini-1.5-flash-8b',
-  'gemini-1.5-pro'
+  'gemini-2.0-flash-lite',
+  'gemini-1.5-flash'
 ];
 
 async function callGemini(key, parts, maxTokens = 900, temp = 0.3) {
+  let lastError = '';
   for (const model of MODELS) {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
@@ -29,26 +30,32 @@ async function callGemini(key, parts, maxTokens = 900, temp = 0.3) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ contents: [{ parts }], generationConfig: { maxOutputTokens: maxTokens, temperature: temp } })
         });
+        const data = await r.json().catch(() => ({}));
+        // Model not found or not supported — skip to next model immediately
+        if (r.status === 404 || (r.status === 400 && data?.error?.message?.includes('not found'))) {
+          lastError = `${model} unavailable`;
+          break;
+        }
+        // Rate limited — wait then retry once, then try next model
         if (r.status === 429 || r.status === 503) {
-          // wait 2s then retry, or move to next model
-          if (attempt === 0) { await new Promise(r => setTimeout(r, 2000)); continue; }
-          else break; // try next model
+          if (attempt === 0) { await new Promise(res => setTimeout(res, 3000)); continue; }
+          lastError = `${model} rate limited`;
+          break;
         }
         if (!r.ok) {
-          const e = await r.json().catch(() => ({}));
-          throw new Error(e?.error?.message || `Error ${r.status}`);
+          lastError = data?.error?.message || `Error ${r.status}`;
+          break;
         }
-        const data = await r.json();
         const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (!text) throw new Error('Empty response');
+        if (!text) { lastError = 'Empty response'; break; }
         return text;
       } catch (err) {
-        if (attempt === 1 || !err.message.includes('429')) throw err;
-        await new Promise(r => setTimeout(r, 2000));
+        lastError = err.message;
+        break;
       }
     }
   }
-  throw new Error('All AI models are currently busy. Please try again in 30 seconds.');
+  throw new Error('AI is temporarily unavailable. Please try again in 30 seconds.');
 }
 
 app.get('/', (req, res) => res.json({ status: 'ChartMind AI running ✓', version: '1.0.0' }));
