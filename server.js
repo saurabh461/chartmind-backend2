@@ -3,7 +3,6 @@ const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 
 const app = express();
-app.set('trust proxy', 1);
 app.use(express.json({ limit: '10mb' }));
 app.use(cors({ origin: '*' }));
 
@@ -14,7 +13,7 @@ const limiter = rateLimit({
 });
 app.use('/api/', limiter);
 
-const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent';
+const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
 
 app.get('/', (req, res) => res.json({ status: 'ChartMind AI running ✓', version: '1.0.0' }));
 
@@ -25,30 +24,29 @@ app.post('/api/analyse', async (req, res) => {
 
     const { imageBase64, imageMimeType, symbol, timeframe, context } = req.body;
 
-    const prompt = `You are ChartMind AI — a professional technical analysis assistant for Indian retail traders.
-Analyse this trading chart for ${symbol || 'the instrument'} on the ${timeframe || 'selected'} timeframe.
+    const prompt = `You are ChartMind AI, a technical analysis assistant for Indian retail traders. Analyse ${symbol || 'this chart'} on the ${timeframe || 'selected'} timeframe.${context ? ` Context: ${context}.` : ''}
 
-## 📊 Pattern Recognition
-What chart patterns are visible? (support/resistance, trend lines, candlestick patterns, formations)
+Be concise but detailed. Use bullet points. No filler words.
 
-## 📈 Trend & Momentum
-Current trend direction? Is momentum strengthening or weakening?
+## 🟢 BUY or 🔴 DON'T BUY
+State clearly: BUY or DON'T BUY — then give 4-6 specific reasons WHY based purely on what you see in the chart.
+- If BUY: explain exactly why — which pattern confirms it, which level held, what momentum shows, what the risk:reward looks like, where to enter, where to put stop loss, what target looks realistic.
+- If DON'T BUY: explain exactly why not — what's wrong with the chart, what pattern signals weakness, what level failed, why the risk is too high right now, what needs to change before it becomes a buy.
 
 ## ⚡ Key Levels
-Critical support and resistance levels with approximate prices.
+- Resistance: [price]
+- Support: [price]
+- Stop loss zone: [price]
+- Target zone: [price]
 
-## 📉 Indicators
-Any visible indicators (RSI, MACD, MAs, Volume, BB) and what they show.
+## 📊 What the Chart Says
+3-4 bullets on patterns, trend, momentum, and indicators visible.
 
-## 🎯 What to Watch
-Key areas and scenarios — what does a bullish breakout vs bearish breakdown look like from here?
-
-## ⚠️ Risk Notes
-Key risks and chart invalidation points.
+## ⚠️ Invalidation
+One sentence: what price action would completely invalidate this analysis.
 
 ---
-⚠️ **Disclaimer**: Educational analysis only. Not financial advice. Not SEBI registered. Always do your own research.
-${context ? `\nContext: ${context}` : ''}`;
+⚠️ Educational only. Not SEBI-registered financial advice. Do your own research.`;
 
     const parts = [];
     if (imageBase64) parts.push({ inline_data: { mime_type: imageMimeType || 'image/png', data: imageBase64 } });
@@ -57,7 +55,7 @@ ${context ? `\nContext: ${context}` : ''}`;
     const r = await fetch(`${GEMINI_URL}?key=${key}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents: [{ parts }], generationConfig: { maxOutputTokens: 1500, temperature: 0.4 } })
+      body: JSON.stringify({ contents: [{ parts }], generationConfig: { maxOutputTokens: 900, temperature: 0.3 } })
     });
 
     if (!r.ok) {
