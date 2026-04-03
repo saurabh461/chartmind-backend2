@@ -13,49 +13,31 @@ const limiter = rateLimit({
 });
 app.use('/api/', limiter);
 
-const MODELS = [
-  'gemini-2.0-flash',
-  'gemini-2.0-flash-lite',
-  'gemini-1.5-flash'
-];
+const GEMINI_MODEL = 'gemini-2.0-flash-exp';
+const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
 async function callGemini(key, parts, maxTokens = 900, temp = 0.3) {
-  let lastError = '';
-  for (const model of MODELS) {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
-        const r = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ contents: [{ parts }], generationConfig: { maxOutputTokens: maxTokens, temperature: temp } })
-        });
-        const data = await r.json().catch(() => ({}));
-        // Model not found or not supported — skip to next model immediately
-        if (r.status === 404 || (r.status === 400 && data?.error?.message?.includes('not found'))) {
-          lastError = `${model} unavailable`;
-          break;
-        }
-        // Rate limited — wait then retry once, then try next model
-        if (r.status === 429 || r.status === 503) {
-          if (attempt === 0) { await new Promise(res => setTimeout(res, 3000)); continue; }
-          lastError = `${model} rate limited`;
-          break;
-        }
-        if (!r.ok) {
-          lastError = data?.error?.message || `Error ${r.status}`;
-          break;
-        }
-        const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (!text) { lastError = 'Empty response'; break; }
-        return text;
-      } catch (err) {
-        lastError = err.message;
-        break;
-      }
-    }
+  const r = await fetch(`${GEMINI_URL}?key=${key}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ parts }],
+      generationConfig: { maxOutputTokens: maxTokens, temperature: temp }
+    })
+  });
+
+  const data = await r.json().catch(() => ({}));
+
+  // Log the real error so you can see it in Render logs
+  if (!r.ok) {
+    console.error('Gemini error:', r.status, JSON.stringify(data?.error || data));
+    const msg = data?.error?.message || `Gemini API error ${r.status}`;
+    throw new Error(msg);
   }
-  throw new Error('AI is temporarily unavailable. Please try again in 30 seconds.');
+
+  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) throw new Error('Empty response from Gemini');
+  return text;
 }
 
 app.get('/', (req, res) => res.json({ status: 'ChartMind AI running ✓', version: '1.0.0' }));
@@ -99,7 +81,7 @@ One sentence: what price action would completely invalidate this analysis.
     try {
       analysis = await callGemini(key, parts, 900, 0.3);
     } catch (err) {
-      return res.status(503).json({ error: err.message });
+      return res.status(503).json({ error: `AI Error: ${err.message}` });
     }
 
     res.json({ analysis });
