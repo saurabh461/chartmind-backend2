@@ -14,10 +14,16 @@ const limiter = rateLimit({
 });
 app.use('/api/', limiter);
 
-const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
+const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent';
 
 async function callGemini(key, parts, maxTokens = 900, temp = 0.3) {
-  const r = await fetch(`${GEMINI_URL}?key=${key}`, {
+  // v1 endpoint — works with all Google AI Studio keys
+  // For vision (image analysis), use gemini-pro-vision
+  const hasImage = parts.some(p => p.inline_data);
+  const model = hasImage ? 'gemini-pro-vision' : 'gemini-pro';
+  const url = `https://generativelanguage.googleapis.com/v1/models/${model}:generateContent?key=${key}`;
+
+  const r = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
