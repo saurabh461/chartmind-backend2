@@ -16,42 +16,44 @@ app.use('/api/', limiter);
 
 const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
 
-// Multiple keys — rotates automatically when one hits quota
 const GEMINI_KEYS = [
   process.env.GEMINI_API_KEY,
   process.env.GEMINI_API_KEY_2,
 ].filter(Boolean);
 
-let currentKeyIndex = 0;
-
 async function callGemini(parts, maxTokens = 900, temp = 0.3) {
-  for (let keyAttempt = 0; keyAttempt < GEMINI_KEYS.length; keyAttempt++) {
-    const key = GEMINI_KEYS[(currentKeyIndex + keyAttempt) % GEMINI_KEYS.length];
-    for (let retry = 0; retry < 2; retry++) {
-      const r = await fetch(`${GEMINI_URL}?key=${key}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts }],
-          generationConfig: { maxOutputTokens: maxTokens, temperature: temp }
-        })
-      });
-      const data = await r.json().catch(() => ({}));
-      if (r.status === 429) {
-        // Quota exhausted on this key — try next key
-        currentKeyIndex = (currentKeyIndex + 1) % GEMINI_KEYS.length;
-        break;
-      }
-      if (!r.ok) {
-        console.error('Gemini error:', r.status, JSON.stringify(data?.error));
-        throw new Error(data?.error?.message || `Gemini API error ${r.status}`);
-      }
-      const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!text) throw new Error('Empty response from Gemini');
-      return text;
+  for (let i = 0; i < GEMINI_KEYS.length; i++) {
+    const key = GEMINI_KEYS[i];
+    const r = await fetch(`${GEMINI_URL}?key=${key}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts }],
+        generationConfig: { maxOutputTokens: maxTokens, temperature: temp }
+      })
+    });
+
+    const data = await r.json().catch(() => ({}));
+
+    if (r.status === 429) {
+      // Extract wait time, default 20s, then try next key
+      const match = data?.error?.message?.match(/retry in ([\d.]+)s/i);
+      const wait = match ? Math.ceil(parseFloat(match[1])) * 1000 : 20000;
+      console.log(`Key ${i+1} quota hit, waiting ${wait}ms then trying next key`);
+      await new Promise(res => setTimeout(res, wait));
+      continue; // try next key
     }
+
+    if (!r.ok) {
+      console.error('Gemini error:', r.status, JSON.stringify(data?.error));
+      throw new Error(data?.error?.message || `Gemini API error ${r.status}`);
+    }
+
+    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!text) throw new Error('Empty response from Gemini');
+    return text;
   }
-  throw new Error('All API keys are currently at quota. Please try again in a few minutes.');
+  throw new Error('Please wait 30 seconds and try again.');
 }
 
 app.get('/', (req, res) => res.json({ status: 'ChartMind AI running ✓', version: '1.0.0' }));
